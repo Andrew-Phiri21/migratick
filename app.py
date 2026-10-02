@@ -95,39 +95,53 @@ def build_unique_indexed_dict(df, primary_key):
         
     return indexed_dict
 
-def run_migratick_engine(df_a, df_b, primary_key):
+def run_migratick_engine(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key: str):
     """
-    Executes aligned record matching using duplicate-safe indexing.
+    Executes duplicate-safe, aligned record matching across identical schemas.
+    Safely guarantees all return variables are explicitly initialized.
     """
+    # 1. Initialize outputs explicitly to prevent UnboundLocalError
+    df_matched = pd.DataFrame()
+    mismatches = []
+    missing_b = []
+    missing_a = []
+
+    # 2. Schema Alignment (keep common columns only)
     common_cols = [col for col in df_a.columns if col in df_b.columns]
-    df_a = df_a[common_cols]
-    df_b = df_b[common_cols]
-    
-    dict_a = build_unique_indexed_dict(df_a, primary_key)
-    dict_b = build_unique_indexed_dict(df_b, primary_key)
-    
+    if primary_key not in common_cols:
+        return df_matched, mismatches, missing_b, missing_a
+
+    df_a_aligned = df_a[common_cols].copy()
+    df_b_aligned = df_b[common_cols].copy()
+
+    # 3. Build duplicate-safe dictionary maps
+    dict_a = build_unique_indexed_dict(df_a_aligned, primary_key)
+    dict_b = build_unique_indexed_dict(df_b_aligned, primary_key)
+
     keys_a = set(dict_a.keys())
     keys_b = set(dict_b.keys())
-    
+
+    # 4. Set operations for key distribution
     common_keys = keys_a.intersection(keys_b)
-    missing_in_b = [dict_a[k]["raw_key"] for k in (keys_a - keys_b)]
-    missing_in_a = [dict_b[k]["raw_key"] for k in (keys_b - keys_a)]
-    
-    mismatches = []
+    missing_b = [dict_a[k]["raw_key"] for k in (keys_a - keys_b)]
+    missing_a = [dict_b[k]["raw_key"] for k in (keys_b - keys_a)]
+
     matched_records = []
-    
+
+    # 5. Cell-by-cell comparative analysis
     for key in common_keys:
         row_a = dict_a[key]["data"]
         row_b = dict_b[key]["data"]
         raw_key = dict_a[key]["raw_key"]
-        
+
         diffs = {}
-        for col in row_a:
-            val_a = row_a[col]
-            val_b = row_b[col]
+        for col in common_cols:
+            val_a = str(row_a[col]) if pd.notna(row_a[col]) else ""
+            val_b = str(row_b[col]) if pd.notna(row_b[col]) else ""
+            
             if val_a != val_b:
                 diffs[col] = {"Dataset_A": val_a, "Dataset_B": val_b}
-                
+
         if diffs:
             mismatches.append({
                 "Primary_Key": raw_key,
@@ -139,9 +153,10 @@ def run_migratick_engine(df_a, df_b, primary_key):
             })
         else:
             matched_records.append(row_a)
-            
-    df_matched = pd.DataFrame(matched_records)
-    
+
+    if matched_records:
+        df_matched = pd.DataFrame(matched_records)
+
     return df_matched, mismatches, missing_b, missing_a
 
 # --- UI DASHBOARD ---
