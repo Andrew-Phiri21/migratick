@@ -226,10 +226,20 @@ if file_a and file_b:
     
     # EXCEL-STYLE SUMMARY MATRIX
     st.subheader("📊 Column-Level Confidence & Parity Summary")
-    st.dataframe(
-        summary_df.style.highlight_between(left=0, right=0, subset=["Mismatched Records"], color_off="#ff4b4b22"), 
-        use_container_width=True
-    )
+   # ✅ Option A: Custom Styler with explicit numerical mapping
+def highlight_mismatches(val):
+    try:
+        val_int = int(val)
+        if val_int > 0:
+            return 'background-color: #ff4b4b33; color: #ff4b4b; font-weight: bold;'
+    except (ValueError, TypeError):
+        pass
+    return ''
+
+st.dataframe(
+    summary_df.style.map(highlight_mismatches, subset=["Mismatched Records"]),
+    use_container_width=True
+)
     
     st.divider()
     
