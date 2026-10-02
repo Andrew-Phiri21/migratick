@@ -3,21 +3,35 @@ import pandas as pd
 import io
 import re
 
+# Set page layout to wide for dashboard-style display
 st.set_page_config(page_title="Migratick | Precision Radar Engine", layout="wide")
 
+
+# --- HELPER & SANITIZATION PIPELINE ---
+
 def detect_header_row(file_bytes, is_csv, max_scan_rows=10):
-    if is_csv:
-        df_raw = pd.read_csv(io.BytesIO(file_bytes), nrows=max_scan_rows, header=None)
-    else:
-        df_raw = pd.read_excel(io.BytesIO(file_bytes), nrows=max_scan_rows, header=None)
-    
-    string_counts = df_raw.apply(
-        lambda row: row.map(lambda x: isinstance(x, str) and not x.replace('.', '', 1).isdigit()).sum(), 
-        axis=1
-    )
-    return int(string_counts.idxmax())
+    """
+    Scans the first N rows of a file to dynamically identify the header row index based on string density.
+    """
+    try:
+        if is_csv:
+            df_raw = pd.read_csv(io.BytesIO(file_bytes), nrows=max_scan_rows, header=None)
+        else:
+            df_raw = pd.read_excel(io.BytesIO(file_bytes), nrows=max_scan_rows, header=None, engine="openpyxl")
+        
+        string_counts = df_raw.apply(
+            lambda row: row.map(lambda x: isinstance(x, str) and not x.replace('.', '', 1).isdigit()).sum(), 
+            axis=1
+        )
+        return int(string_counts.idxmax())
+    except Exception:
+        return 0
+
 
 def clean_phone_number(val):
+    """
+    Strips phone number prefixes such as '26', '+26', or non-numeric characters.
+    """
     if pd.isna(val) or val == "":
         return ""
     val_str = str(val).split('.')[0].strip()
@@ -27,6 +41,7 @@ def clean_phone_number(val):
         digits = digits[2:]
         
     return digits
+
 
 def normalize_value(val, is_phone=False):
     """
@@ -46,7 +61,11 @@ def normalize_value(val, is_phone=False):
         
     return val_str
 
+
 def sanitize_dataframe(df):
+    """
+    Applies column whitespace trimming and data normalization across fields.
+    """
     df_clean = df.copy()
     df_clean.columns = [str(col).strip() for col in df_clean.columns]
     
@@ -57,7 +76,11 @@ def sanitize_dataframe(df):
             
     return df_clean
 
+
 def auto_detect_primary_key(df_a, df_b):
+    """
+    Evaluates column uniqueness ratios across datasets to identify the optimal primary alignment key.
+    """
     common_cols = [col for col in df_a.columns if col in df_b.columns]
     best_key = None
     highest_score = -1.0
@@ -68,7 +91,7 @@ def auto_detect_primary_key(df_a, df_b):
         avg_score = (unique_ratio_a + unique_ratio_b) / 2.0
         
         col_lower = col.lower()
-        if any(k in col_lower for k in ['id', 'number', 'code', 'card', 'phone', 'account', 'email', 'identifier']):
+        if any(k in col_lower for k in ['id', 'number', 'code', 'card', 'phone', 'account', 'email', 'identifier', 'name']):
             avg_score += 0.25
             
         if avg_score > highest_score:
@@ -77,11 +100,14 @@ def auto_detect_primary_key(df_a, df_b):
             
     return best_key
 
+
+# --- CORE COMPARISON ENGINE ---
+
 def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key: str):
     """
-    Executes precise record alignment via Outer/Inner Join on the selected Primary Key.
+    Executes precise record alignment via direct Key Matching.
     Calculates per-column match counts, mismatches, and confidence percentages.
-    Guarantees output variable bounds under all execution paths.
+    Safely guarantees all return variables are explicitly initialized.
     """
     # 1. Initialize output variables at top level to prevent UnboundLocalError
     summary_df = pd.DataFrame()
@@ -175,15 +201,17 @@ def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key
 
     return summary_df, mismatched_records, missing_b, missing_a, total_matched_keys
 
+
 # --- DASHBOARD UI ---
-st.title("⚡ Migratick | Precision Data Engine")
+
+st.title("⚡ Migratick | Precision Radar Engine")
 st.caption("Enterprise Dataset Parity, Auto-Normalization & Excel-Grade Analytics")
 
 col1, col2 = st.columns(2)
 with col1:
-    file_a = st.file_uploader("Upload Dataset A (e.g. ETC)", type=["csv", "xlsx"])
+    file_a = st.file_uploader("Upload Dataset A (Base)", type=["csv", "xlsx"])
 with col2:
-    file_b = st.file_uploader("Upload Dataset B (e.g. UTS)", type=["csv", "xlsx"])
+    file_b = st.file_uploader("Upload Dataset B (Comparison)", type=["csv", "xlsx"])
 
 if file_a and file_b:
     st.divider()
@@ -226,20 +254,23 @@ if file_a and file_b:
     
     # EXCEL-STYLE SUMMARY MATRIX
     st.subheader("📊 Column-Level Confidence & Parity Summary")
-   # ✅ Option A: Custom Styler with explicit numerical mapping
-def highlight_mismatches(val):
-    try:
-        val_int = int(val)
-        if val_int > 0:
-            return 'background-color: #ff4b4b33; color: #ff4b4b; font-weight: bold;'
-    except (ValueError, TypeError):
-        pass
-    return ''
+    
+    def highlight_mismatches(val):
+        try:
+            val_int = int(val)
+            if val_int > 0:
+                return 'background-color: #ff4b4b33; color: #ff4b4b; font-weight: bold;'
+        except (ValueError, TypeError):
+            pass
+        return ''
 
-st.dataframe(
-    summary_df.style.map(highlight_mismatches, subset=["Mismatched Records"]),
-    use_container_width=True
-)
+    if not summary_df.empty:
+        st.dataframe(
+            summary_df.style.map(highlight_mismatches, subset=["Mismatched Records"]),
+            use_container_width=True
+        )
+    else:
+        st.warning("No overlapping columns or matched keys found between the datasets.")
     
     st.divider()
     
