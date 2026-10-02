@@ -1,17 +1,19 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import io
 import re
+from difflib import SequenceMatcher
 
 # Set page layout to wide for dashboard-style display
-st.set_page_config(page_title="Migratick | Precision Radar Engine", layout="wide")
+st.set_page_config(page_title="Migratick | Mark VII AI Radar Engine", layout="wide")
 
 
-# --- HELPER & SANITIZATION PIPELINE ---
+# --- MARK VII DATA HYGIENE & NORMALIZATION ---
 
 def detect_header_row(file_bytes, is_csv, max_scan_rows=10):
     """
-    Scans the first N rows of a file to dynamically identify the header row index based on string density.
+    Scans the first N rows to dynamically identify the true header row index based on string density.
     """
     try:
         if is_csv:
@@ -30,12 +32,10 @@ def detect_header_row(file_bytes, is_csv, max_scan_rows=10):
 
 def clean_phone_number(val):
     """
-    Strips phone number prefixes such as '26', '+26', or non-numeric characters and removes spaces.
+    Strips country code prefixes and all non-numeric characters.
     """
     if pd.isna(val) or val == "":
         return ""
-    
-    # Strip whitespace and non-breaking spaces
     val_str = str(val).replace('\xa0', ' ').split('.')[0].strip()
     digits = re.sub(r'\D', '', val_str)
     
@@ -47,8 +47,10 @@ def clean_phone_number(val):
 
 def normalize_value(val, is_phone=False):
     """
-    Applies Mark VI Data Hygiene: Removes non-breaking spaces, trims leading/trailing spaces,
-    collapses multiple spaces, and normalizes float-integers (e.g. '1359.0' -> '1359').
+    Mark VII Precision Normalization:
+    - Trims leading/trailing/internal multi-spaces
+    - Forces UPPERCASE for case-insensitive exact matching
+    - Rounds floats/decimals strictly to 2 decimal places
     """
     if pd.isna(val) or val is None:
         return ""
@@ -56,13 +58,22 @@ def normalize_value(val, is_phone=False):
     if is_phone:
         return clean_phone_number(val)
         
-    # Replace non-breaking spaces and convert to string
+    # Standardize string representation
     val_str = str(val).replace('\xa0', ' ')
+    val_str = re.sub(r'\s+', ' ', val_str).strip().upper()
     
-    # Collapse multiple internal spaces down to a single space
-    val_str = re.sub(r'\s+', ' ', val_str).strip()
+    # Handle float/numeric rounding to exactly 2 decimal places
+    try:
+        # Check if value is numeric
+        num_val = float(val_str)
+        if np.isnan(num_val):
+            return ""
+        # Format strictly to 2 decimal places
+        return f"{num_val:.2f}"
+    except ValueError:
+        pass
     
-    # Handle float representation of integers (e.g., '1359.0' -> '1359')
+    # Clean up trailing float zeros on non-pure numbers if any
     if val_str.endswith('.0'):
         val_str = val_str[:-2]
         
@@ -71,11 +82,11 @@ def normalize_value(val, is_phone=False):
 
 def sanitize_dataframe(df):
     """
-    Applies rigorous column and cell-level whitespace trimming and normalization across all fields.
+    Applies Mark VII deep cleaning, trimming, and numeric rounding across all columns.
     """
     df_clean = df.copy()
     
-    # Clean Column Headers: strip and collapse whitespace
+    # Standardize Column Headers: strip, collapse spaces, and force clean format
     df_clean.columns = [re.sub(r'\s+', ' ', str(col).replace('\xa0', ' ')).strip() for col in df_clean.columns]
     
     for col in df_clean.columns:
@@ -84,6 +95,30 @@ def sanitize_dataframe(df):
         df_clean[col] = df_clean[col].apply(lambda x: normalize_value(x, is_phone=is_phone_col))
             
     return df_clean
+
+
+# --- AI SEMANTIC & FUZZY MATCHING ENGINE ---
+
+# Semantic dictionary map for domain-specific equivalences (e.g., Transaction Types)
+SEMANTIC_MAP = {
+    "DEBIT": "DR", "DR": "DR", "D": "DR", "PURCHASE": "DR", "PAYMENT": "DR",
+    "CREDIT": "CR", "CR": "CR", "C": "CR", "REFUND": "CR", "DEPOSIT": "CR"
+}
+
+def ai_similarity_score(val_a: str, val_b: str) -> float:
+    """
+    Calculates sequence similarity ratio using Levenshtein-based diffing.
+    """
+    if val_a == val_b:
+        return 1.0
+    
+    # Check Semantic Map equivalences (e.g., 'DEBIT' vs 'DR')
+    mapped_a = SEMANTIC_MAP.get(val_a, val_a)
+    mapped_b = SEMANTIC_MAP.get(val_b, val_b)
+    if mapped_a == mapped_b:
+        return 1.0
+        
+    return SequenceMatcher(None, val_a, val_b).ratio()
 
 
 def auto_detect_primary_key(df_a, df_b):
@@ -112,11 +147,10 @@ def auto_detect_primary_key(df_a, df_b):
 
 # --- CORE COMPARISON ENGINE ---
 
-def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key: str):
+def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key: str, similarity_threshold: float = 0.88):
     """
-    Executes precise record alignment via direct Key Matching.
-    Calculates per-column match counts, mismatches, and confidence percentages.
-    Safely guarantees all return variables are explicitly initialized.
+    Executes record alignment via sorted Primary Key sets.
+    Combines exact matching with AI fuzzy/semantic fallbacks.
     """
     summary_df = pd.DataFrame()
     mismatched_records = []
@@ -128,8 +162,9 @@ def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key
     if not common_cols or primary_key not in common_cols:
         return summary_df, mismatched_records, missing_b, missing_a, total_matched_keys
 
-    df_a_aligned = df_a[common_cols].copy()
-    df_b_aligned = df_b[common_cols].copy()
+    # Align columns and sort deterministically by Primary Key
+    df_a_aligned = df_a[common_cols].copy().sort_values(by=[primary_key]).reset_index(drop=True)
+    df_b_aligned = df_b[common_cols].copy().sort_values(by=[primary_key]).reset_index(drop=True)
     
     df_a_aligned[primary_key] = df_a_aligned[primary_key].astype(str).str.strip()
     df_b_aligned[primary_key] = df_b_aligned[primary_key].astype(str).str.strip()
@@ -157,6 +192,7 @@ def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key
 
     compare_cols = [c for c in common_cols if c != primary_key]
 
+    # Row-by-Row Cell Inspection
     for _, row in merged.iterrows():
         key_val = row[primary_key]
         row_diffs = {}
@@ -165,8 +201,16 @@ def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key
             val_a = str(row[f"{col}_A"]) if pd.notna(row[f"{col}_A"]) else ""
             val_b = str(row[f"{col}_B"]) if pd.notna(row[f"{col}_B"]) else ""
             
+            # First check direct equality
             if val_a != val_b:
-                row_diffs[col] = {"File_A": val_a, "File_B": val_b}
+                # Fallback to AI Semantic & Fuzzy Evaluation
+                score = ai_similarity_score(val_a, val_b)
+                if score < similarity_threshold:
+                    row_diffs[col] = {
+                        "File_A": val_a, 
+                        "File_B": val_b,
+                        "Match_Score": f"{score * 100:.1f}%"
+                    }
                 
         if row_diffs:
             rec_a = {col: row[f"{col}_A"] for col in compare_cols}
@@ -182,12 +226,18 @@ def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key
                 "Full_B": rec_b
             })
 
+    # Summary Matrix Calculation
     col_summary = []
     for col in compare_cols:
         col_a = merged[f"{col}_A"].fillna("").astype(str)
         col_b = merged[f"{col}_B"].fillna("").astype(str)
         
-        matches = int((col_a == col_b).sum())
+        # Calculate AI-Aware Match Counts
+        matches = 0
+        for va, vb in zip(col_a, col_b):
+            if va == vb or ai_similarity_score(va, vb) >= similarity_threshold:
+                matches += 1
+                
         mismatches_count = total_matched_keys - matches
         confidence = (matches / total_matched_keys * 100) if total_matched_keys > 0 else 0.0
         
@@ -205,8 +255,8 @@ def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key
 
 # --- DASHBOARD UI ---
 
-st.title("⚡ Migratick | Precision Radar Engine")
-st.caption("Enterprise Dataset Parity, Auto-Normalization & Excel-Grade Analytics")
+st.title("⚡ Migratick | Mark VII AI Radar Engine")
+st.caption("Enterprise Data Reconciliation with AI Semantic Matching & 2-Decimal Precision")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -227,22 +277,26 @@ if file_a and file_b:
     df_a_raw = pd.read_csv(io.BytesIO(bytes_a), header=header_idx_a) if is_csv_a else pd.read_excel(io.BytesIO(bytes_a), header=header_idx_a, engine="openpyxl")
     df_b_raw = pd.read_csv(io.BytesIO(bytes_b), header=header_idx_b) if is_csv_b else pd.read_excel(io.BytesIO(bytes_b), header=header_idx_b, engine="openpyxl")
     
-    # Apply Mark VI Data Hygiene Pipeline
+    # Mark VII Data Sanitization
     df_a = sanitize_dataframe(df_a_raw)
     df_b = sanitize_dataframe(df_b_raw)
     
     detected_key = auto_detect_primary_key(df_a, df_b)
     common_columns = [col for col in df_a.columns if col in df_b.columns]
     
-    st.info(f"🔍 **Auto-Detection Active:** Headers set at Row {header_idx_a + 1} (File A) & Row {header_idx_b + 1} (File B).")
+    st.info(f"🔍 **Auto-Detection Active:** Headers located at Row {header_idx_a + 1} (File A) & Row {header_idx_b + 1} (File B). All floats rounded to 2 decimals.")
     
-    selected_key = st.selectbox(
-        "📌 Select Primary Key for Sorting & Row Alignment:", 
-        common_columns, 
-        index=common_columns.index(detected_key) if detected_key in common_columns else 0
-    )
+    c_key, c_thresh = st.columns([2, 1])
+    with c_key:
+        selected_key = st.selectbox(
+            "📌 Select Primary Key for Sorting & Row Alignment:", 
+            common_columns, 
+            index=common_columns.index(detected_key) if detected_key in common_columns else 0
+        )
+    with c_thresh:
+        ai_threshold = st.slider("🤖 AI Fuzzy Tolerance Threshold:", min_value=0.70, max_value=1.00, value=0.88, step=0.02, help="Lower values accept minor typos in merchant names or codes.")
     
-    summary_df, mismatches, missing_b, missing_a, total_keys = run_precision_comparison(df_a, df_b, selected_key)
+    summary_df, mismatches, missing_b, missing_a, total_keys = run_precision_comparison(df_a, df_b, selected_key, similarity_threshold=ai_threshold)
     
     # TOP-LEVEL METRICS
     m1, m2, m3, m4, m5 = st.columns(5)
@@ -254,7 +308,7 @@ if file_a and file_b:
     
     st.divider()
     
-    # EXCEL-STYLE SUMMARY MATRIX
+    # SUMMARY MATRIX
     st.subheader("📊 Column-Level Confidence & Parity Summary")
     
     def highlight_mismatches(val):
