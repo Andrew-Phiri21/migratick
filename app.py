@@ -77,46 +77,70 @@ def auto_detect_primary_key(df_a, df_b):
             
     return best_key
 
-def run_precision_comparison(df_a, df_b, primary_key):
+def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key: str):
     """
-    Performs precise record alignment via Outer Join on the selected Primary Key.
+    Executes precise record alignment via Outer/Inner Join on the selected Primary Key.
     Calculates per-column match counts, mismatches, and confidence percentages.
+    Guarantees output variable bounds under all execution paths.
     """
+    # 1. Initialize output variables at top level to prevent UnboundLocalError
+    summary_df = pd.DataFrame()
+    mismatched_records = []
+    missing_b = []
+    missing_a = []
+    total_matched_keys = 0
+
+    # Safety Check: Column verification
     common_cols = [col for col in df_a.columns if col in df_b.columns]
+    if not common_cols or primary_key not in common_cols:
+        return summary_df, mismatched_records, missing_b, missing_a, total_matched_keys
+
+    # 2. Align datasets and convert Primary Keys to clean, uniform strings
+    df_a_aligned = df_a[common_cols].copy()
+    df_b_aligned = df_b[common_cols].copy()
     
-    df_a_aligned = df_a[common_cols].drop_duplicates(subset=[primary_key]).copy()
-    df_b_aligned = df_b[common_cols].drop_duplicates(subset=[primary_key]).copy()
+    df_a_aligned[primary_key] = df_a_aligned[primary_key].astype(str).str.strip()
+    df_b_aligned[primary_key] = df_b_aligned[primary_key].astype(str).str.strip()
+
+    # Drop duplicate primary keys to ensure 1-to-1 parity matching
+    df_a_unique = df_a_aligned.drop_duplicates(subset=[primary_key]).copy()
+    df_b_unique = df_b_aligned.drop_duplicates(subset=[primary_key]).copy()
+
+    # 3. Calculate missing keys across both datasets
+    keys_a = set(df_a_unique[primary_key])
+    keys_b = set(df_b_unique[primary_key])
     
-    # Merge datasets directly on Primary Key
+    missing_b = sorted(list(keys_a - keys_b))
+    missing_a = sorted(list(keys_b - keys_a))
+
+    # 4. Perform direct Inner Merge on Primary Key
     merged = pd.merge(
-        df_a_aligned, 
-        df_b_aligned, 
+        df_a_unique, 
+        df_b_unique, 
         on=primary_key, 
         suffixes=('_A', '_B'), 
         how='inner'
     )
     
     total_matched_keys = len(merged)
-    
-    # Metrics matrix per column
-    stats = []
-    mismatched_records = []
-    
+    if total_matched_keys == 0:
+        return summary_df, mismatched_records, missing_b, missing_a, total_matched_keys
+
     compare_cols = [c for c in common_cols if c != primary_key]
-    
+
+    # 5. Cell-by-cell row inspection
     for _, row in merged.iterrows():
         key_val = row[primary_key]
         row_diffs = {}
         
         for col in compare_cols:
-            val_a = row[f"{col}_A"]
-            val_b = row[f"{col}_B"]
+            val_a = str(row[f"{col}_A"]) if pd.notna(row[f"{col}_A"]) else ""
+            val_b = str(row[f"{col}_B"]) if pd.notna(row[f"{col}_B"]) else ""
             
             if val_a != val_b:
                 row_diffs[col] = {"File_A": val_a, "File_B": val_b}
                 
         if row_diffs:
-            # Build full record context
             rec_a = {col: row[f"{col}_A"] for col in compare_cols}
             rec_a[primary_key] = key_val
             rec_b = {col: row[f"{col}_B"] for col in compare_cols}
@@ -130,31 +154,25 @@ def run_precision_comparison(df_a, df_b, primary_key):
                 "Full_B": rec_b
             })
 
-    # Calculate column-by-column confidence matrix (Excel Summary replication)
+    # 6. Build Excel-Style Confidence & Summary Matrix
     col_summary = []
     for col in compare_cols:
-        col_a = merged[f"{col}_A"]
-        col_b = merged[f"{col}_B"]
+        col_a = merged[f"{col}_A"].fillna("").astype(str)
+        col_b = merged[f"{col}_B"].fillna("").astype(str)
         
-        matches = (col_a == col_b).sum()
-        mismatches = total_matched_keys - matches
+        matches = int((col_a == col_b).sum())
+        mismatches_count = total_matched_keys - matches
         confidence = (matches / total_matched_keys * 100) if total_matched_keys > 0 else 0.0
         
         col_summary.append({
             "Column Name": col,
             "Matched Records": matches,
-            "Mismatched Records": mismatches,
+            "Mismatched Records": mismatches_count,
             "Confidence Rating": f"{confidence:.2f}%"
         })
         
     summary_df = pd.DataFrame(col_summary)
-    
-    # Missing records check
-    keys_a = set(df_a_aligned[primary_key])
-    keys_b = set(df_b_aligned[primary_key])
-    missing_in_b = list(keys_a - keys_b)
-    missing_in_a = list(keys_b - keys_a)
-    
+
     return summary_df, mismatched_records, missing_b, missing_a, total_matched_keys
 
 # --- DASHBOARD UI ---
