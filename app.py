@@ -30,11 +30,13 @@ def detect_header_row(file_bytes, is_csv, max_scan_rows=10):
 
 def clean_phone_number(val):
     """
-    Strips phone number prefixes such as '26', '+26', or non-numeric characters.
+    Strips phone number prefixes such as '26', '+26', or non-numeric characters and removes spaces.
     """
     if pd.isna(val) or val == "":
         return ""
-    val_str = str(val).split('.')[0].strip()
+    
+    # Strip whitespace and non-breaking spaces
+    val_str = str(val).replace('\xa0', ' ').split('.')[0].strip()
     digits = re.sub(r'\D', '', val_str)
     
     if digits.startswith('26') and len(digits) > 8:
@@ -45,7 +47,8 @@ def clean_phone_number(val):
 
 def normalize_value(val, is_phone=False):
     """
-    Normalizes inputs so floats like 100.0, strings like '100 ', and integers 100 match perfectly.
+    Applies Mark VI Data Hygiene: Removes non-breaking spaces, trims leading/trailing spaces,
+    collapses multiple spaces, and normalizes float-integers (e.g. '1359.0' -> '1359').
     """
     if pd.isna(val) or val is None:
         return ""
@@ -53,7 +56,11 @@ def normalize_value(val, is_phone=False):
     if is_phone:
         return clean_phone_number(val)
         
-    val_str = str(val).strip()
+    # Replace non-breaking spaces and convert to string
+    val_str = str(val).replace('\xa0', ' ')
+    
+    # Collapse multiple internal spaces down to a single space
+    val_str = re.sub(r'\s+', ' ', val_str).strip()
     
     # Handle float representation of integers (e.g., '1359.0' -> '1359')
     if val_str.endswith('.0'):
@@ -64,10 +71,12 @@ def normalize_value(val, is_phone=False):
 
 def sanitize_dataframe(df):
     """
-    Applies column whitespace trimming and data normalization across fields.
+    Applies rigorous column and cell-level whitespace trimming and normalization across all fields.
     """
     df_clean = df.copy()
-    df_clean.columns = [str(col).strip() for col in df_clean.columns]
+    
+    # Clean Column Headers: strip and collapse whitespace
+    df_clean.columns = [re.sub(r'\s+', ' ', str(col).replace('\xa0', ' ')).strip() for col in df_clean.columns]
     
     for col in df_clean.columns:
         col_lower = col.lower()
@@ -109,37 +118,31 @@ def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key
     Calculates per-column match counts, mismatches, and confidence percentages.
     Safely guarantees all return variables are explicitly initialized.
     """
-    # 1. Initialize output variables at top level to prevent UnboundLocalError
     summary_df = pd.DataFrame()
     mismatched_records = []
     missing_b = []
     missing_a = []
     total_matched_keys = 0
 
-    # Safety Check: Column verification
     common_cols = [col for col in df_a.columns if col in df_b.columns]
     if not common_cols or primary_key not in common_cols:
         return summary_df, mismatched_records, missing_b, missing_a, total_matched_keys
 
-    # 2. Align datasets and convert Primary Keys to clean, uniform strings
     df_a_aligned = df_a[common_cols].copy()
     df_b_aligned = df_b[common_cols].copy()
     
     df_a_aligned[primary_key] = df_a_aligned[primary_key].astype(str).str.strip()
     df_b_aligned[primary_key] = df_b_aligned[primary_key].astype(str).str.strip()
 
-    # Drop duplicate primary keys to ensure 1-to-1 parity matching
     df_a_unique = df_a_aligned.drop_duplicates(subset=[primary_key]).copy()
     df_b_unique = df_b_aligned.drop_duplicates(subset=[primary_key]).copy()
 
-    # 3. Calculate missing keys across both datasets
     keys_a = set(df_a_unique[primary_key])
     keys_b = set(df_b_unique[primary_key])
     
     missing_b = sorted(list(keys_a - keys_b))
     missing_a = sorted(list(keys_b - keys_a))
 
-    # 4. Perform direct Inner Merge on Primary Key
     merged = pd.merge(
         df_a_unique, 
         df_b_unique, 
@@ -154,7 +157,6 @@ def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key
 
     compare_cols = [c for c in common_cols if c != primary_key]
 
-    # 5. Cell-by-cell row inspection
     for _, row in merged.iterrows():
         key_val = row[primary_key]
         row_diffs = {}
@@ -180,7 +182,6 @@ def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key
                 "Full_B": rec_b
             })
 
-    # 6. Build Excel-Style Confidence & Summary Matrix
     col_summary = []
     for col in compare_cols:
         col_a = merged[f"{col}_A"].fillna("").astype(str)
@@ -226,6 +227,7 @@ if file_a and file_b:
     df_a_raw = pd.read_csv(io.BytesIO(bytes_a), header=header_idx_a) if is_csv_a else pd.read_excel(io.BytesIO(bytes_a), header=header_idx_a, engine="openpyxl")
     df_b_raw = pd.read_csv(io.BytesIO(bytes_b), header=header_idx_b) if is_csv_b else pd.read_excel(io.BytesIO(bytes_b), header=header_idx_b, engine="openpyxl")
     
+    # Apply Mark VI Data Hygiene Pipeline
     df_a = sanitize_dataframe(df_a_raw)
     df_b = sanitize_dataframe(df_b_raw)
     
@@ -242,7 +244,7 @@ if file_a and file_b:
     
     summary_df, mismatches, missing_b, missing_a, total_keys = run_precision_comparison(df_a, df_b, selected_key)
     
-    # TOP-LEVEL METRICS (Matches Excel Summary Header)
+    # TOP-LEVEL METRICS
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("File A Rows", len(df_a))
     m2.metric("File B Rows", len(df_b))
