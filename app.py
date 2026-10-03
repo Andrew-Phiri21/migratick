@@ -9,10 +9,10 @@ from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 # Set page layout to wide for dashboard-style display
-st.set_page_config(page_title="Migratick | Mark VIII AI Radar Engine", layout="wide")
+st.set_page_config(page_title="Migratick | Mark IX Context Engine", layout="wide")
 
 
-# --- MARK VII DATA HYGIENE & NORMALIZATION ---
+# --- DATA HYGIENE & NORMALIZATION ---
 
 def detect_header_row(file_bytes, is_csv, max_scan_rows=10):
     """
@@ -50,7 +50,7 @@ def clean_phone_number(val):
 
 def normalize_value(val, is_phone=False):
     """
-    Mark VII Precision Normalization:
+    Precision Normalization:
     - Trims leading/trailing/internal multi-spaces
     - Forces UPPERCASE for case-insensitive exact matching
     - Rounds floats/decimals strictly to 2 decimal places
@@ -80,7 +80,7 @@ def normalize_value(val, is_phone=False):
 
 def sanitize_dataframe(df):
     """
-    Applies Mark VII deep cleaning, trimming, and numeric rounding across all columns.
+    Applies deep cleaning, trimming, and numeric rounding across all columns.
     """
     df_clean = df.copy()
     df_clean.columns = [re.sub(r'\s+', ' ', str(col).replace('\xa0', ' ')).strip() for col in df_clean.columns]
@@ -241,25 +241,24 @@ def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key
     return summary_df, mismatched_records, missing_b, missing_a, total_matched_keys
 
 
-# --- MARK VIII EXCEL REPORT GENERATOR ---
+# --- MARK IX CONTEXT-AWARE EXCEL REPORT GENERATOR ---
 
-def generate_excel_mismatch_report(summary_df, mismatches, missing_b, missing_a, primary_key):
+def generate_excel_mismatch_report(summary_df, mismatches, missing_b, missing_a, primary_key, context_cols):
     """
-    Generates a beautifully formatted, executive-ready Excel workbook with:
-    1. Executive Parity Summary
-    2. Dynamic Side-by-Side Mismatched Fields Only
-    3. Missing Record Keys
+    Generates a context-aware multi-tab Excel workbook:
+    - Primary Key + Context identification columns pinned upfront
+    - Side-by-side mismatch pairs for divergent fields only
+    - Visual red highlighting on delta cells
     """
     output = io.BytesIO()
     wb = openpyxl.Workbook()
     
-    # Define Professional Styles
+    # Styling Definitions
     header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
     header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    context_fill = PatternFill(start_color="2D6B9E", end_color="2D6B9E", fill_type="solid")
     red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
     red_font = Font(name="Calibri", size=11, color="9C0006")
-    border_thin = Side(style='thin', color='D9D9D9')
-    box_border = Border(left=border_thin, right=border_thin, top=border_thin, bottom=border_thin)
     center_align = Alignment(horizontal="center", vertical="center")
     left_align = Alignment(horizontal="left", vertical="center")
 
@@ -289,36 +288,50 @@ def generate_excel_mismatch_report(summary_df, mismatches, missing_b, missing_a,
             
         ws_summary.cell(row=row_idx, column=4, value=row_data["Confidence Rating"]).alignment = center_align
 
-    # --- TAB 2: SIDE-BY-SIDE MISMATCHES (ONLY MISMATCHED FIELDS) ---
+    # --- TAB 2: SIDE-BY-SIDE DELTAS WITH CONTEXT COLUMNS ---
     ws_side = wb.create_sheet(title="Side-by-Side Deltas")
     ws_side.views.sheetView[0].showGridLines = True
     
-    # Identify all fields that experienced at least one mismatch
+    # Filter out context columns from being duplicated in the dynamic delta search
     all_mismatched_fields = sorted(list(set(
         field for item in mismatches for field in item["Deltas"].keys()
     )))
     
-    # Build dynamic headers: Primary Key | Field1 (File A) | Field1 (File B) | Field2 (File A) ...
-    side_headers = [f"Primary Key ({primary_key})", "Mismatched Fields Count"]
+    # Headers Construction: Primary Key | Context Columns... | Dynamic Mismatched Pairs...
+    side_headers = [f"Primary Key ({primary_key})"]
+    for ctx in context_cols:
+        side_headers.append(f"Context: {ctx}")
+        
     for field in all_mismatched_fields:
         side_headers.append(f"{field} (File A)")
         side_headers.append(f"{field} (File B)")
         
     ws_side.append(side_headers)
+    
+    # Format Headers
     for col_num in range(1, len(side_headers) + 1):
         cell = ws_side.cell(row=1, column=col_num)
         cell.font = header_font
-        cell.fill = header_fill
+        cell.fill = context_fill if "Context:" in side_headers[col_num - 1] else header_fill
         cell.alignment = center_align
 
+    # Fill Mismatch Rows
     for r_idx, item in enumerate(mismatches, 2):
         key_val = item["Primary_Key"]
         deltas = item["Deltas"]
+        full_a = item["Full_A"]
         
+        # Write Primary Key
         ws_side.cell(row=r_idx, column=1, value=key_val).alignment = center_align
-        ws_side.cell(row=r_idx, column=2, value=len(deltas)).alignment = center_align
         
-        col_cursor = 3
+        # Write Context Columns (pulling from File A base)
+        col_cursor = 2
+        for ctx in context_cols:
+            ctx_val = full_a.get(ctx, "")
+            ws_side.cell(row=r_idx, column=col_cursor, value=ctx_val).alignment = left_align
+            col_cursor += 1
+            
+        # Write Side-by-Side Mismatches
         for field in all_mismatched_fields:
             c_a = ws_side.cell(row=r_idx, column=col_cursor)
             c_b = ws_side.cell(row=r_idx, column=col_cursor + 1)
@@ -330,11 +343,9 @@ def generate_excel_mismatch_report(summary_df, mismatches, missing_b, missing_a,
                 c_a.value = val_a
                 c_b.value = val_b
                 
-                # Highlight variances side-by-side
                 c_a.fill = red_fill
                 c_b.fill = red_fill
             else:
-                # Leave empty or show match indicator
                 c_a.value = "-"
                 c_b.value = "-"
                 c_a.alignment = center_align
@@ -346,9 +357,9 @@ def generate_excel_mismatch_report(summary_df, mismatches, missing_b, missing_a,
     ws_missing = wb.create_sheet(title="Missing Keys")
     ws_missing.views.sheetView[0].showGridLines = True
     
-    ws_missing.cell(row=1, column=1, value=f"Keys in File A (Missing in B)").font = header_font
+    ws_missing.cell(row=1, column=1, value="Keys in File A (Missing in B)").font = header_font
     ws_missing.cell(row=1, column=1).fill = header_fill
-    ws_missing.cell(row=1, column=2, value=f"Keys in File B (Missing in A)").font = header_font
+    ws_missing.cell(row=1, column=2, value="Keys in File B (Missing in A)").font = header_font
     ws_missing.cell(row=1, column=2).fill = header_fill
     
     max_missing_len = max(len(missing_b), len(missing_a), 1)
@@ -363,7 +374,7 @@ def generate_excel_mismatch_report(summary_df, mismatches, missing_b, missing_a,
         for col in ws.columns:
             max_len = max(len(str(cell.value or '')) for cell in col)
             col_letter = get_column_letter(col[0].column)
-            ws.column_dimensions[col_letter].width = max(max_len + 3, 14)
+            ws.column_dimensions[col_letter].width = max(max_len + 3, 15)
 
     wb.save(output)
     output.seek(0)
@@ -372,8 +383,8 @@ def generate_excel_mismatch_report(summary_df, mismatches, missing_b, missing_a,
 
 # --- DASHBOARD UI ---
 
-st.title("⚡ Migratick | Mark VIII AI Radar Engine")
-st.caption("Enterprise Data Reconciliation with Dynamic Excel Export Engine")
+st.title("⚡ Migratick | Mark IX AI Radar Engine")
+st.caption("Enterprise Data Reconciliation with Context-Aware Excel Reporting")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -400,21 +411,34 @@ if file_a and file_b:
     detected_key = auto_detect_primary_key(df_a, df_b)
     common_columns = [col for col in df_a.columns if col in df_b.columns]
     
-    st.info(f"🔍 **Auto-Detection Active:** Headers located at Row {header_idx_a + 1} (File A) & Row {header_idx_b + 1} (File B). All floats rounded to 2 decimals.")
+    st.info(f"🔍 **Auto-Detection Active:** Headers located at Row {header_idx_a + 1} (File A) & Row {header_idx_b + 1} (File B). Floats rounded to 2 decimals.")
     
-    c_key, c_thresh = st.columns([2, 1])
+    c_key, c_context, c_thresh = st.columns([2, 2, 1])
     with c_key:
         selected_key = st.selectbox(
-            "📌 Select Primary Key for Sorting & Row Alignment:", 
+            "📌 Select Primary Alignment Key:", 
             common_columns, 
             index=common_columns.index(detected_key) if detected_key in common_columns else 0
         )
+    
+    # Context Identifier Selector
+    available_context_cols = [c for c in common_columns if c != selected_key]
+    default_contexts = [c for c in available_context_cols if any(k in c.lower() for k in ['merchant', 'distributor', 'name', 'type', 'date', 'account'])]
+    
+    with c_context:
+        selected_context_cols = st.multiselect(
+            "🏷️ Select Context Columns for Report:",
+            options=available_context_cols,
+            default=default_contexts[:2] if default_contexts else available_context_cols[:2],
+            help="These columns will be included in the export and preview matrix to easily identify each record."
+        )
+
     with c_thresh:
-        ai_threshold = st.slider("🤖 AI Fuzzy Tolerance Threshold:", min_value=0.70, max_value=1.00, value=0.88, step=0.02)
+        ai_threshold = st.slider("🤖 AI Fuzzy Tolerance:", min_value=0.70, max_value=1.00, value=0.88, step=0.02)
     
     summary_df, mismatches, missing_b, missing_a, total_keys = run_precision_comparison(df_a, df_b, selected_key, similarity_threshold=ai_threshold)
     
-    # TOP-LEVEL METRICS & EXPORT BUTTON
+    # METRICS & EXPORT BUTTON
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("File A Rows", len(df_a))
     m2.metric("File B Rows", len(df_b))
@@ -424,12 +448,11 @@ if file_a and file_b:
     
     st.divider()
 
-    # --- EXPORT REPORT BUTTON ---
     if not summary_df.empty:
-        excel_data = generate_excel_mismatch_report(summary_df, mismatches, missing_b, missing_a, selected_key)
+        excel_data = generate_excel_mismatch_report(summary_df, mismatches, missing_b, missing_a, selected_key, selected_context_cols)
         
         st.download_button(
-            label="📥 Export Executive Side-by-Side Mismatch Report (.xlsx)",
+            label="📥 Export Executive Context-Aware Mismatch Report (.xlsx)",
             data=excel_data,
             file_name=f"Migratick_Mismatch_Report_{selected_key}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -460,7 +483,7 @@ if file_a and file_b:
     st.divider()
     
     tab_mismatches, tab_missing, tab_sanitized = st.tabs([
-        "🔴 Detailed Cell Mismatches", 
+        "🔴 Context-Aware Side-by-Side Deltas", 
         "⚠️ Missing Record Keys", 
         "🧹 Sanitized Data Preview"
     ])
@@ -469,13 +492,20 @@ if file_a and file_b:
         if mismatches:
             st.subheader(f"Identified {len(mismatches)} Rows with Value Deviations")
             
-            # SIDE-BY-SIDE INTERACTIVE UI TABLE
+            # SIDE-BY-SIDE INTERACTIVE UI TABLE WITH CONTEXT COLUMNS
             side_by_side_preview = []
             for item in mismatches:
-                row_dict = {"Primary Key": item["Primary_Key"]}
+                row_dict = {f"Primary Key ({selected_key})": item["Primary_Key"]}
+                
+                # Context Columns
+                for ctx in selected_context_cols:
+                    row_dict[f"Context: {ctx}"] = item["Full_A"].get(ctx, "")
+                    
+                # Dynamic Deltas
                 for col_name, delta in item["Deltas"].items():
                     row_dict[f"{col_name} (File A)"] = delta["File_A"]
                     row_dict[f"{col_name} (File B)"] = delta["File_B"]
+                    
                 side_by_side_preview.append(row_dict)
             
             st.dataframe(pd.DataFrame(side_by_side_preview).fillna("-"), use_container_width=True)
