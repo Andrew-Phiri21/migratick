@@ -4,9 +4,12 @@ import numpy as np
 import io
 import re
 from difflib import SequenceMatcher
+import openpyxl
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 # Set page layout to wide for dashboard-style display
-st.set_page_config(page_title="Migratick | Mark VII AI Radar Engine", layout="wide")
+st.set_page_config(page_title="Migratick | Mark VIII AI Radar Engine", layout="wide")
 
 
 # --- MARK VII DATA HYGIENE & NORMALIZATION ---
@@ -58,22 +61,17 @@ def normalize_value(val, is_phone=False):
     if is_phone:
         return clean_phone_number(val)
         
-    # Standardize string representation
     val_str = str(val).replace('\xa0', ' ')
     val_str = re.sub(r'\s+', ' ', val_str).strip().upper()
     
-    # Handle float/numeric rounding to exactly 2 decimal places
     try:
-        # Check if value is numeric
         num_val = float(val_str)
         if np.isnan(num_val):
             return ""
-        # Format strictly to 2 decimal places
         return f"{num_val:.2f}"
     except ValueError:
         pass
     
-    # Clean up trailing float zeros on non-pure numbers if any
     if val_str.endswith('.0'):
         val_str = val_str[:-2]
         
@@ -85,8 +83,6 @@ def sanitize_dataframe(df):
     Applies Mark VII deep cleaning, trimming, and numeric rounding across all columns.
     """
     df_clean = df.copy()
-    
-    # Standardize Column Headers: strip, collapse spaces, and force clean format
     df_clean.columns = [re.sub(r'\s+', ' ', str(col).replace('\xa0', ' ')).strip() for col in df_clean.columns]
     
     for col in df_clean.columns:
@@ -99,7 +95,6 @@ def sanitize_dataframe(df):
 
 # --- AI SEMANTIC & FUZZY MATCHING ENGINE ---
 
-# Semantic dictionary map for domain-specific equivalences (e.g., Transaction Types)
 SEMANTIC_MAP = {
     "DEBIT": "DR", "DR": "DR", "D": "DR", "PURCHASE": "DR", "PAYMENT": "DR",
     "CREDIT": "CR", "CR": "CR", "C": "CR", "REFUND": "CR", "DEPOSIT": "CR"
@@ -112,7 +107,6 @@ def ai_similarity_score(val_a: str, val_b: str) -> float:
     if val_a == val_b:
         return 1.0
     
-    # Check Semantic Map equivalences (e.g., 'DEBIT' vs 'DR')
     mapped_a = SEMANTIC_MAP.get(val_a, val_a)
     mapped_b = SEMANTIC_MAP.get(val_b, val_b)
     if mapped_a == mapped_b:
@@ -162,7 +156,6 @@ def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key
     if not common_cols or primary_key not in common_cols:
         return summary_df, mismatched_records, missing_b, missing_a, total_matched_keys
 
-    # Align columns and sort deterministically by Primary Key
     df_a_aligned = df_a[common_cols].copy().sort_values(by=[primary_key]).reset_index(drop=True)
     df_b_aligned = df_b[common_cols].copy().sort_values(by=[primary_key]).reset_index(drop=True)
     
@@ -192,7 +185,6 @@ def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key
 
     compare_cols = [c for c in common_cols if c != primary_key]
 
-    # Row-by-Row Cell Inspection
     for _, row in merged.iterrows():
         key_val = row[primary_key]
         row_diffs = {}
@@ -201,9 +193,7 @@ def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key
             val_a = str(row[f"{col}_A"]) if pd.notna(row[f"{col}_A"]) else ""
             val_b = str(row[f"{col}_B"]) if pd.notna(row[f"{col}_B"]) else ""
             
-            # First check direct equality
             if val_a != val_b:
-                # Fallback to AI Semantic & Fuzzy Evaluation
                 score = ai_similarity_score(val_a, val_b)
                 if score < similarity_threshold:
                     row_diffs[col] = {
@@ -226,13 +216,11 @@ def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key
                 "Full_B": rec_b
             })
 
-    # Summary Matrix Calculation
     col_summary = []
     for col in compare_cols:
         col_a = merged[f"{col}_A"].fillna("").astype(str)
         col_b = merged[f"{col}_B"].fillna("").astype(str)
         
-        # Calculate AI-Aware Match Counts
         matches = 0
         for va, vb in zip(col_a, col_b):
             if va == vb or ai_similarity_score(va, vb) >= similarity_threshold:
@@ -253,10 +241,139 @@ def run_precision_comparison(df_a: pd.DataFrame, df_b: pd.DataFrame, primary_key
     return summary_df, mismatched_records, missing_b, missing_a, total_matched_keys
 
 
+# --- MARK VIII EXCEL REPORT GENERATOR ---
+
+def generate_excel_mismatch_report(summary_df, mismatches, missing_b, missing_a, primary_key):
+    """
+    Generates a beautifully formatted, executive-ready Excel workbook with:
+    1. Executive Parity Summary
+    2. Dynamic Side-by-Side Mismatched Fields Only
+    3. Missing Record Keys
+    """
+    output = io.BytesIO()
+    wb = openpyxl.Workbook()
+    
+    # Define Professional Styles
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+    red_font = Font(name="Calibri", size=11, color="9C0006")
+    border_thin = Side(style='thin', color='D9D9D9')
+    box_border = Border(left=border_thin, right=border_thin, top=border_thin, bottom=border_thin)
+    center_align = Alignment(horizontal="center", vertical="center")
+    left_align = Alignment(horizontal="left", vertical="center")
+
+    # --- TAB 1: PARITY SUMMARY ---
+    ws_summary = wb.active
+    ws_summary.title = "Parity Summary"
+    ws_summary.views.sheetView[0].showGridLines = True
+    
+    summary_headers = ["Column Name", "Matched Records", "Mismatched Records", "Confidence Rating"]
+    ws_summary.append(summary_headers)
+    
+    for col_num, header in enumerate(summary_headers, 1):
+        cell = ws_summary.cell(row=1, column=col_num)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+
+    for row_idx, row_data in enumerate(summary_df.to_dict('records'), 2):
+        ws_summary.cell(row=row_idx, column=1, value=row_data["Column Name"]).alignment = left_align
+        ws_summary.cell(row=row_idx, column=2, value=row_data["Matched Records"]).alignment = center_align
+        
+        m_cell = ws_summary.cell(row=row_idx, column=3, value=row_data["Mismatched Records"])
+        m_cell.alignment = center_align
+        if row_data["Mismatched Records"] > 0:
+            m_cell.fill = red_fill
+            m_cell.font = red_font
+            
+        ws_summary.cell(row=row_idx, column=4, value=row_data["Confidence Rating"]).alignment = center_align
+
+    # --- TAB 2: SIDE-BY-SIDE MISMATCHES (ONLY MISMATCHED FIELDS) ---
+    ws_side = wb.create_sheet(title="Side-by-Side Deltas")
+    ws_side.views.sheetView[0].showGridLines = True
+    
+    # Identify all fields that experienced at least one mismatch
+    all_mismatched_fields = sorted(list(set(
+        field for item in mismatches for field in item["Deltas"].keys()
+    )))
+    
+    # Build dynamic headers: Primary Key | Field1 (File A) | Field1 (File B) | Field2 (File A) ...
+    side_headers = [f"Primary Key ({primary_key})", "Mismatched Fields Count"]
+    for field in all_mismatched_fields:
+        side_headers.append(f"{field} (File A)")
+        side_headers.append(f"{field} (File B)")
+        
+    ws_side.append(side_headers)
+    for col_num in range(1, len(side_headers) + 1):
+        cell = ws_side.cell(row=1, column=col_num)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+
+    for r_idx, item in enumerate(mismatches, 2):
+        key_val = item["Primary_Key"]
+        deltas = item["Deltas"]
+        
+        ws_side.cell(row=r_idx, column=1, value=key_val).alignment = center_align
+        ws_side.cell(row=r_idx, column=2, value=len(deltas)).alignment = center_align
+        
+        col_cursor = 3
+        for field in all_mismatched_fields:
+            c_a = ws_side.cell(row=r_idx, column=col_cursor)
+            c_b = ws_side.cell(row=r_idx, column=col_cursor + 1)
+            
+            if field in deltas:
+                val_a = deltas[field]["File_A"]
+                val_b = deltas[field]["File_B"]
+                
+                c_a.value = val_a
+                c_b.value = val_b
+                
+                # Highlight variances side-by-side
+                c_a.fill = red_fill
+                c_b.fill = red_fill
+            else:
+                # Leave empty or show match indicator
+                c_a.value = "-"
+                c_b.value = "-"
+                c_a.alignment = center_align
+                c_b.alignment = center_align
+                
+            col_cursor += 2
+
+    # --- TAB 3: MISSING KEYS ---
+    ws_missing = wb.create_sheet(title="Missing Keys")
+    ws_missing.views.sheetView[0].showGridLines = True
+    
+    ws_missing.cell(row=1, column=1, value=f"Keys in File A (Missing in B)").font = header_font
+    ws_missing.cell(row=1, column=1).fill = header_fill
+    ws_missing.cell(row=1, column=2, value=f"Keys in File B (Missing in A)").font = header_font
+    ws_missing.cell(row=1, column=2).fill = header_fill
+    
+    max_missing_len = max(len(missing_b), len(missing_a), 1)
+    for i in range(max_missing_len):
+        val_b = missing_b[i] if i < len(missing_b) else ""
+        val_a = missing_a[i] if i < len(missing_a) else ""
+        ws_missing.cell(row=i+2, column=1, value=val_b).alignment = center_align
+        ws_missing.cell(row=i+2, column=2, value=val_a).alignment = center_align
+
+    # Auto-adjust column widths across all sheets
+    for ws in [ws_summary, ws_side, ws_missing]:
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = get_column_letter(col[0].column)
+            ws.column_dimensions[col_letter].width = max(max_len + 3, 14)
+
+    wb.save(output)
+    output.seek(0)
+    return output
+
+
 # --- DASHBOARD UI ---
 
-st.title("⚡ Migratick | Mark VII AI Radar Engine")
-st.caption("Enterprise Data Reconciliation with AI Semantic Matching & 2-Decimal Precision")
+st.title("⚡ Migratick | Mark VIII AI Radar Engine")
+st.caption("Enterprise Data Reconciliation with Dynamic Excel Export Engine")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -277,7 +394,6 @@ if file_a and file_b:
     df_a_raw = pd.read_csv(io.BytesIO(bytes_a), header=header_idx_a) if is_csv_a else pd.read_excel(io.BytesIO(bytes_a), header=header_idx_a, engine="openpyxl")
     df_b_raw = pd.read_csv(io.BytesIO(bytes_b), header=header_idx_b) if is_csv_b else pd.read_excel(io.BytesIO(bytes_b), header=header_idx_b, engine="openpyxl")
     
-    # Mark VII Data Sanitization
     df_a = sanitize_dataframe(df_a_raw)
     df_b = sanitize_dataframe(df_b_raw)
     
@@ -294,11 +410,11 @@ if file_a and file_b:
             index=common_columns.index(detected_key) if detected_key in common_columns else 0
         )
     with c_thresh:
-        ai_threshold = st.slider("🤖 AI Fuzzy Tolerance Threshold:", min_value=0.70, max_value=1.00, value=0.88, step=0.02, help="Lower values accept minor typos in merchant names or codes.")
+        ai_threshold = st.slider("🤖 AI Fuzzy Tolerance Threshold:", min_value=0.70, max_value=1.00, value=0.88, step=0.02)
     
     summary_df, mismatches, missing_b, missing_a, total_keys = run_precision_comparison(df_a, df_b, selected_key, similarity_threshold=ai_threshold)
     
-    # TOP-LEVEL METRICS
+    # TOP-LEVEL METRICS & EXPORT BUTTON
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("File A Rows", len(df_a))
     m2.metric("File B Rows", len(df_b))
@@ -307,7 +423,20 @@ if file_a and file_b:
     m5.metric("Missing Keys", len(missing_b) + len(missing_a), delta_color="inverse")
     
     st.divider()
-    
+
+    # --- EXPORT REPORT BUTTON ---
+    if not summary_df.empty:
+        excel_data = generate_excel_mismatch_report(summary_df, mismatches, missing_b, missing_a, selected_key)
+        
+        st.download_button(
+            label="📥 Export Executive Side-by-Side Mismatch Report (.xlsx)",
+            data=excel_data,
+            file_name=f"Migratick_Mismatch_Report_{selected_key}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+        st.divider()
+
     # SUMMARY MATRIX
     st.subheader("📊 Column-Level Confidence & Parity Summary")
     
@@ -340,17 +469,18 @@ if file_a and file_b:
         if mismatches:
             st.subheader(f"Identified {len(mismatches)} Rows with Value Deviations")
             
-            preview_table = []
+            # SIDE-BY-SIDE INTERACTIVE UI TABLE
+            side_by_side_preview = []
             for item in mismatches:
-                preview_table.append({
-                    "Primary Key": item["Primary_Key"],
-                    "Mismatched Fields": item["Mismatched_Columns"],
-                    "Field Deltas": str(item["Deltas"])
-                })
+                row_dict = {"Primary Key": item["Primary_Key"]}
+                for col_name, delta in item["Deltas"].items():
+                    row_dict[f"{col_name} (File A)"] = delta["File_A"]
+                    row_dict[f"{col_name} (File B)"] = delta["File_B"]
+                side_by_side_preview.append(row_dict)
             
-            st.dataframe(pd.DataFrame(preview_table), use_container_width=True)
+            st.dataframe(pd.DataFrame(side_by_side_preview).fillna("-"), use_container_width=True)
             
-            selected_mismatch_key = st.selectbox("Inspect Record Key:", [m["Primary_Key"] for m in mismatches])
+            selected_mismatch_key = st.selectbox("Inspect Record Details:", [m["Primary_Key"] for m in mismatches])
             if selected_mismatch_key:
                 record = next(m for m in mismatches if m["Primary_Key"] == selected_mismatch_key)
                 
