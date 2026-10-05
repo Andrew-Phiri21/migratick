@@ -520,17 +520,17 @@ def generate_excel_mismatch_report_v2(
 
 # --- STAGE 5: DASHBOARD UI & COMMAND CENTER ---
 
-st.title("⚡ Migratick | Mark X Context Engine")
-st.caption("Enterprise Reconciliation Matrix & AI-Powered Parity Auditor")
+st.title("⚡ Migratick | Comparison Engine")
+st.caption("ETC | UTS Data matching soulution")
 
 col1, col2 = st.columns(2)
 with col1:
   file_a = st.file_uploader(
-      "📁 Upload Dataset A (Base System / Core)", type=["csv", "xlsx"]
+      "📁 Upload Dataset A (Base System / ETC)", type=["csv", "xlsx"]
   )
 with col2:
   file_b = st.file_uploader(
-      "📁 Upload Dataset B (Target System / Audit)", type=["csv", "xlsx"]
+      "📁 Upload Dataset B (Target System / UTS)", type=["csv", "xlsx"]
   )
 
 if file_a and file_b:
@@ -567,7 +567,7 @@ if file_a and file_b:
   st.info(
       f"🔍 **Auto-Detection Active:** Headers located at Row {header_idx_a + 1}"
       f" (File A) & Row {header_idx_b + 1} (File B)."
-      f" {'⚡ RapidFuzz Acceleration Active.' if HAS_RAPIDFUZZ else '⚠️ Using standard difflib engine.'}"
+      f" {'⚡ Instant lookup.' if HAS_RAPIDFUZZ else '⚠️ Using If and Vlookup.'}"
   )
 
   c_key, c_context, c_thresh = st.columns([2, 2, 1])
