@@ -8,7 +8,7 @@ from openpyxl.utils import get_column_letter
 import pandas as pd
 import streamlit as st
 
-# Rapidfuzz acceleration fallback
+# High-performance C-accelerated Levenshtein distance fallback
 try:
   from rapidfuzz.distance import Levenshtein
 
@@ -16,9 +16,9 @@ try:
 except ImportError:
   HAS_RAPIDFUZZ = False
 
-# --- STAGE 0: PAGE CONFIG & STARK CSS ENHANCEMENTS ---
+# --- STAGE 0: STARK PAGE CONFIG & DASHBOARD STYLING ---
 st.set_page_config(
-    page_title="Migratick | Mark XI Precision Engine",
+    page_title="Migratick | Mark XII Universal Engine",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -44,12 +44,12 @@ st.markdown(
 )
 
 
-# --- STAGE 1: DATA HYGIENE, CARD CLEANING & PARSING ---
+# --- STAGE 1: JUNK GUARD & CANONICAL SANITIZATION ---
 
 
-def is_valid_card_key(val: str) -> bool:
-  """Excludes Excel export footers, administrative text, timestamps, and empty cells."""
-  if not val or pd.isna(val):
+def is_valid_record_key(val: str) -> bool:
+  """Excludes Excel export footers, administrative metadata, timestamps, and empty rows."""
+  if val is None or pd.isna(val):
     return False
 
   s_val = str(val).strip().upper()
@@ -65,44 +65,77 @@ def is_valid_card_key(val: str) -> bool:
       "SYSTEM",
       "TIMESTAMP",
       "PRINTED",
+      "NAN",
+      "NONE",
   ]
   if any(keyword in s_val for keyword in junk_keywords):
     return False
 
-  # Must contain digits to be a valid key or card number
-  if not re.search(r"\d", s_val):
+  # Key must contain alphanumeric content
+  if not re.search(r"[A-Za-z0-9]", s_val):
     return False
 
   return True
 
 
 def clean_card_identifier(val) -> str:
-  """Strips decimal artifacts (.0), spaces, non-numeric junk, and leading zeros from card numbers."""
+  """Strips decimal artifacts (.0 / .00), spaces, non-numeric junk, and leading zeros from card keys."""
   if pd.isna(val) or val is None:
     return ""
 
   val_str = str(val).replace("\xa0", " ").strip()
 
-  # Strip float decimal representations like '.0' or '.00'
+  # Remove trailing float decimal strings
   if val_str.endswith(".00"):
     val_str = val_str[:-3]
   elif val_str.endswith(".0"):
     val_str = val_str[:-2]
 
-  # If float with trailing zero from Excel import
   val_str = val_str.split(".")[0].strip()
 
-  # Remove non-digits
+  # Remove non-digits for pure numeric keys
   digits_only = re.sub(r"\D", "", val_str)
 
-  # Remove leading zeros to form canonical match key
+  # Strip leading zeros for canonical alignment
   clean_key = digits_only.lstrip("0")
 
   return clean_key if clean_key else digits_only
 
 
+def clean_phone_number(val) -> str:
+  """Normalizes country code prefixes (+260 / 260 / 0) to standard 10-digit phone strings."""
+  if pd.isna(val) or val == "":
+    return ""
+  val_str = str(val).replace("\xa0", " ").split(".")[0].strip()
+  digits = re.sub(r"\D", "", val_str)
+
+  if digits.startswith("260") and len(digits) == 12:
+    digits = "0" + digits[3:]
+  elif digits.startswith("26") and len(digits) > 8:
+    digits = "0" + digits[2:]
+
+  return digits
+
+
+def normalize_business_text(text: str) -> str:
+  """Strips legal entity noise words (LTD, LIMITED, MERCHANT) & punctuation for high-precision business matching."""
+  if not text or pd.isna(text):
+    return ""
+  t = str(text).upper()
+
+  # Remove noise tokens
+  t = re.sub(
+      r"\b(LIMITED|LTD|MERCHANT|ENTERPRISE|ENTERPRISES|AND|TRADERS|COMPANY|CO)\b",
+      "",
+      t,
+  )
+  # Retain alphanumeric characters only
+  t = re.sub(r"[^A-Z0-9]", "", t)
+  return t
+
+
 def detect_header_row(file_bytes: bytes, is_csv: bool, max_scan_rows: int = 10) -> int:
-  """Scans the first N rows to dynamically identify the true header row index based on string density."""
+  """Scans first N rows to dynamically identify the true header row index."""
   try:
     if is_csv:
       df_raw = pd.read_csv(
@@ -128,32 +161,13 @@ def detect_header_row(file_bytes: bytes, is_csv: bool, max_scan_rows: int = 10) 
     return 0
 
 
-def clean_phone_number(val) -> str:
-  """Strips country code prefixes and non-numeric characters."""
-  if pd.isna(val) or val == "":
-    return ""
-  val_str = str(val).replace("\xa0", " ").split(".")[0].strip()
-  digits = re.sub(r"\D", "", val_str)
-
-  if digits.startswith("26") and len(digits) > 8:
-    digits = digits[2:]
-
-  return digits
-
-
 def normalize_value(val, col_name: str = "", is_phone: bool = False) -> str:
-  """Precision Normalization:
-
-  - Ensures Card/ID numbers never have decimals (.00)
-  - Trims whitespace and forces UPPERCASE for matching
-  - Rounds currency/balance fields strictly to 2 decimal places
-  """
+  """Precision Column Normalizer."""
   if pd.isna(val) or val is None:
     return ""
 
   col_lower = col_name.lower()
 
-  # Check if column is a Card or Key field
   if any(k in col_lower for k in ["card", "id", "code", "account", "number"]):
     return clean_card_identifier(val)
 
@@ -166,12 +180,11 @@ def normalize_value(val, col_name: str = "", is_phone: bool = False) -> str:
   val_str = str(val).replace("\xa0", " ")
   val_str = re.sub(r"\s+", " ", val_str).strip().upper()
 
-  # Handle float/decimal rounding for balances/numeric amounts only
+  # Numeric & Currency formatting (strictly 2 decimals for balance)
   try:
     num_val = float(val_str)
     if np.isnan(num_val):
       return ""
-    # Strip decimals if it's a whole number integer string
     if num_val.is_integer():
       return f"{int(num_val)}"
     return f"{num_val:.2f}"
@@ -190,7 +203,6 @@ def sanitize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
   """Applies deep cleaning, column trimming, and decimal suppression across all fields."""
   df_clean = df.copy()
 
-  # Clean Column Headers
   df_clean.columns = [
       re.sub(r"\s+", " ", str(col).replace("\xa0", " ")).strip()
       for col in df_clean.columns
@@ -204,7 +216,7 @@ def sanitize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
   return df_clean
 
 
-# --- STAGE 2: AI SEMANTIC & FUZZY MATCHING ENGINE ---
+# --- STAGE 2: AI SEMANTIC & HYBRID MATCHING ENGINE ---
 
 SEMANTIC_MAP = {
     "DEBIT": "DR",
@@ -223,13 +235,19 @@ SEMANTIC_MAP = {
 
 
 def ai_similarity_score(val_a: str, val_b: str) -> float:
-  """Calculates sequence similarity ratio with semantic mappings and high-performance fuzzy matchers."""
+  """Calculates similarity score combining exact, semantic, and fuzzy matching algorithms."""
   if val_a == val_b:
     return 1.0
 
   mapped_a = SEMANTIC_MAP.get(val_a, val_a)
   mapped_b = SEMANTIC_MAP.get(val_b, val_b)
   if mapped_a == mapped_b:
+    return 1.0
+
+  # Check normalized business text identity
+  norm_a = normalize_business_text(val_a)
+  norm_b = normalize_business_text(val_b)
+  if norm_a and norm_b and norm_a == norm_b:
     return 1.0
 
   if HAS_RAPIDFUZZ:
@@ -300,7 +318,7 @@ def run_precision_comparison_v2(
   df_a_aligned = df_a[common_cols].copy()
   df_b_aligned = df_b[common_cols].copy()
 
-  # Create composite alignment key if multiple keys selected
+  # Build alignment key
   if len(primary_keys) == 1:
     pk_col = primary_keys[0]
     df_a_aligned["_ALIGN_KEY"] = df_a_aligned[pk_col].apply(
@@ -327,12 +345,12 @@ def run_precision_comparison_v2(
         )
     )
 
-  # Filter out non-card metadata, footers, and junk rows from key evaluation
+  # Filter out non-record metadata and footers
   df_a_aligned = df_a_aligned[
-      df_a_aligned["_ALIGN_KEY"].apply(is_valid_card_key)
+      df_a_aligned["_ALIGN_KEY"].apply(is_valid_record_key)
   ].copy()
   df_b_aligned = df_b_aligned[
-      df_b_aligned["_ALIGN_KEY"].apply(is_valid_card_key)
+      df_b_aligned["_ALIGN_KEY"].apply(is_valid_record_key)
   ].copy()
 
   df_a_unique = df_a_aligned.drop_duplicates(subset=["_ALIGN_KEY"]).copy()
@@ -341,12 +359,11 @@ def run_precision_comparison_v2(
   keys_a = set(df_a_unique["_ALIGN_KEY"])
   keys_b = set(df_b_unique["_ALIGN_KEY"])
 
-  # Calculate missing keys (Filter strictly for valid card keys)
   raw_missing_b = sorted(list(keys_a - keys_b))
   raw_missing_a = sorted(list(keys_b - keys_a))
 
-  missing_b = [k for k in raw_missing_b if is_valid_card_key(k)]
-  missing_a = [k for k in raw_missing_a if is_valid_card_key(k)]
+  missing_b = [k for k in raw_missing_b if is_valid_record_key(k)]
+  missing_a = [k for k in raw_missing_a if is_valid_record_key(k)]
 
   merged = pd.merge(
       df_a_unique,
@@ -540,14 +557,13 @@ def generate_excel_mismatch_report_v2(
     cell.alignment = center_align
 
   for r_idx, item in enumerate(mismatches, 2):
-    # Ensure Primary Key value is printed without floats
     key_val = clean_card_identifier(item["Primary_Key"])
     deltas = item["Deltas"]
     full_a = item["Full_A"]
 
     c_key = ws_side.cell(row=r_idx, column=1, value=key_val)
     c_key.alignment = center_align
-    c_key.number_format = "@"  # Explicit Text Format to suppress float coercion
+    c_key.number_format = "@"  # Force text format in Excel
 
     col_cursor = 2
     for ctx in context_cols:
@@ -586,12 +602,11 @@ def generate_excel_mismatch_report_v2(
   ).font = header_font
   ws_missing.cell(row=1, column=2).fill = header_fill
 
-  # Filter out metadata footers from missing keys sheets
   clean_missing_b = [
-      clean_card_identifier(k) for k in missing_b if is_valid_card_key(k)
+      clean_card_identifier(k) for k in missing_b if is_valid_record_key(k)
   ]
   clean_missing_a = [
-      clean_card_identifier(k) for k in missing_a if is_valid_card_key(k)
+      clean_card_identifier(k) for k in missing_a if is_valid_record_key(k)
   ]
 
   max_missing_len = max(len(clean_missing_b), len(clean_missing_a), 1)
@@ -604,10 +619,10 @@ def generate_excel_mismatch_report_v2(
 
     cell_b.alignment = center_align
     cell_a.alignment = center_align
-    cell_b.number_format = "@"  # Force text format in Excel
+    cell_b.number_format = "@"
     cell_a.number_format = "@"
 
-  # Auto-adjust column widths
+  # Auto-fit column widths
   for ws in [ws_summary, ws_side, ws_missing]:
     for col in ws.columns:
       max_len = max(len(str(cell.value or "")) for cell in col)
@@ -621,20 +636,20 @@ def generate_excel_mismatch_report_v2(
 
 # --- STAGE 5: DASHBOARD UI & COMMAND CENTER ---
 
-st.title("⚡ Migratick | Mark XI Precision Engine")
+st.title("⚡ Migratick | Data Analysis Tool")
 st.caption(
-    "Enterprise Reconciliation Matrix & AI-Powered Parity Auditor (Footer"
-    " Exclusions & Integer Card Protection Active)"
+    "Enterprise Reconciliation Matrix & AI-Powered Parity Auditor (Excludes"
+    " Footers & Suppresses Card Decimals)"
 )
 
 col1, col2 = st.columns(2)
 with col1:
   file_a = st.file_uploader(
-      "📁 Upload Dataset A (Base System / Core)", type=["csv", "xlsx"]
+      "📁 Upload Dataset A (Base System / ETC)", type=["csv", "xlsx"]
   )
 with col2:
   file_b = st.file_uploader(
-      "📁 Upload Dataset B (Target System / Audit)", type=["csv", "xlsx"]
+      "📁 Upload Dataset B (Target System / UTS)", type=["csv", "xlsx"]
   )
 
 if file_a and file_b:
@@ -706,9 +721,7 @@ if file_a and file_b:
         default=default_contexts[:2]
         if default_contexts
         else available_context_cols[:2],
-        help=(
-            "Included in exported sheets to contextualize row-level deltas."
-        ),
+        help="Included in exported sheets to contextualize row-level deltas.",
     )
 
   with c_thresh:
@@ -731,14 +744,12 @@ if file_a and file_b:
         df_a, df_b, selected_keys, similarity_threshold=ai_threshold
     )
 
-    # Executive Metrics Matrix
+    # Metrics Overview
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("File A Rows", f"{len(df_a):,}")
     m2.metric("File B Rows", f"{len(df_b):,}")
     m3.metric("Aligned Key Pairs", f"{total_keys:,}")
-    m4.metric(
-        "Row Mismatches", f"{len(mismatches):,}", delta_color="inverse"
-    )
+    m4.metric("Row Mismatches", f"{len(mismatches):,}", delta_color="inverse")
     m5.metric(
         "Missing Keys",
         f"{len(missing_b) + len(missing_a):,}",
@@ -760,16 +771,14 @@ if file_a and file_b:
       st.download_button(
           label="📥 Export Executive Context-Aware Mismatch Report (.xlsx)",
           data=excel_data,
-          file_name=(
-              f"Migratick_Mismatch_Report_{'_'.join(selected_keys)}.xlsx"
-          ),
+          file_name=f"Migratick_Mismatch_Report_{'_'.join(selected_keys)}.xlsx",
           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
           use_container_width=True,
       )
       st.divider()
 
     # Column Parity Table
-    st.subheader("📊 Column-Level Parity & Confidence Matrix")
+    st.subheader("📊 Matching Records & Confidence Matrix")
 
     def highlight_mismatches(val):
       try:
@@ -833,7 +842,8 @@ if file_a and file_b:
           record = next(
               m
               for m in mismatches
-              if clean_card_identifier(m["Primary_Key"]) == selected_mismatch_key
+              if clean_card_identifier(m["Primary_Key"])
+              == selected_mismatch_key
           )
           c_left, c_right = st.columns(2)
           with c_left:
@@ -843,9 +853,7 @@ if file_a and file_b:
             st.markdown("**File B State:**")
             st.json(record["Full_B"])
       else:
-        st.success(
-            "🎉 100% Parity Achieved across all aligned primary records!"
-        )
+        st.success("🎉 100% Parity Achieved across all aligned primary records!")
 
     with tab_missing:
       col_m1, col_m2 = st.columns(2)
