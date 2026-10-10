@@ -638,8 +638,7 @@ def generate_excel_mismatch_report_v2(
 
 st.title("⚡ Migratick | Data Comparison Tool")
 st.caption(
-    "V-lookup and If Formula on steroids (Excludes"
-    " Footers & Suppresses Card Decimals)"
+    "V-lookup and If Formula on steroids 
 )
 
 col1, col2 = st.columns(2)
