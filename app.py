@@ -636,20 +636,20 @@ def generate_excel_mismatch_report_v2(
 
 # --- STAGE 5: DASHBOARD UI & COMMAND CENTER ---
 
-st.title("⚡ Migratick | Data Analysis Tool")
+st.title("⚡ Migratick | Data Comparison Tool")
 st.caption(
-    "Enterprise Reconciliation Matrix & AI-Powered Parity Auditor (Excludes"
+    "V-lookup and If Formula on steroids (Excludes"
     " Footers & Suppresses Card Decimals)"
 )
 
 col1, col2 = st.columns(2)
 with col1:
   file_a = st.file_uploader(
-      "📁 Upload Dataset A (Base System / ETC)", type=["csv", "xlsx"]
+      "📁 Upload Dataset A (Origin / ETC)", type=["csv", "xlsx"]
   )
 with col2:
   file_b = st.file_uploader(
-      "📁 Upload Dataset B (Target System / UTS)", type=["csv", "xlsx"]
+      "📁 Upload Dataset B (Target / UTS)", type=["csv", "xlsx"]
   )
 
 if file_a and file_b:
@@ -716,7 +716,7 @@ if file_a and file_b:
 
   with c_context:
     selected_context_cols = st.multiselect(
-        "🏷️ Select Context Columns for Report:",
+        "🏷️ Select Columns for Report:",
         options=available_context_cols,
         default=default_contexts[:2]
         if default_contexts
@@ -726,7 +726,7 @@ if file_a and file_b:
 
   with c_thresh:
     ai_threshold = st.slider(
-        "🤖 AI Fuzzy Tolerance:",
+        "🤖 AI Accuracy:",
         min_value=0.70,
         max_value=1.00,
         value=0.88,
@@ -769,7 +769,7 @@ if file_a and file_b:
       )
 
       st.download_button(
-          label="📥 Export Executive Context-Aware Mismatch Report (.xlsx)",
+          label="📥 Export Mismatch Report (.xlsx)",
           data=excel_data,
           file_name=f"Migratick_Mismatch_Report_{'_'.join(selected_keys)}.xlsx",
           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -801,7 +801,7 @@ if file_a and file_b:
     st.divider()
 
     tab_mismatches, tab_missing, tab_sanitized = st.tabs([
-        "🔴 Context-Aware Side-by-Side Deltas",
+        "🔴 Data comparison",
         "⚠️ Missing Record Keys",
         "🧹 Sanitized Data Preview",
     ])
@@ -834,7 +834,7 @@ if file_a and file_b:
 
         st.divider()
         selected_mismatch_key = st.selectbox(
-            "🔎 Deep Inspect Specific Key Delta:",
+            "🔎 Deep Analysis",
             [clean_card_identifier(m["Primary_Key"]) for m in mismatches],
         )
 
