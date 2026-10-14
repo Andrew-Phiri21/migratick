@@ -563,7 +563,7 @@ def generate_excel_mismatch_report_v2(
 
     c_key = ws_side.cell(row=r_idx, column=1, value=key_val)
     c_key.alignment = center_align
-    c_key.number_format = "@"  # Force text format in Excel
+    c_key.number_format = "@"
 
     col_cursor = 2
     for ctx in context_cols:
@@ -690,10 +690,11 @@ if file_a and file_b:
 
   c_key, c_context, c_thresh = st.columns([2, 2, 1])
   with c_key:
+    default_keys = detected_keys if detected_keys else ([common_columns[0]] if common_columns else [])
     selected_keys = st.multiselect(
         "📌 Select Primary Alignment Key(s) [Supports Composite Keys]:",
         options=common_columns,
-        default=detected_keys if detected_keys else [common_columns[0]],
+        default=default_keys,
     )
 
   available_context_cols = [c for c in common_columns if c not in selected_keys]
